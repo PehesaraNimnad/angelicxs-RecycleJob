@@ -1,14 +1,24 @@
 fx_version 'cerulean'
 game 'gta5'
 
-author 'AngelicXS'
-version '1.1.1'
+author 'AngelicXS (Reworked v2.0) Rework by Project07'
+version '2.0.0'
 
-client_script 'client.lua'
-
-server_script {
-	'server.lua',
-    '@mysql-async/lib/MySQL.lua'
+shared_scripts {
+    '@ox_lib/init.lua',
+    'config.lua',
 }
 
-shared_script 'config.lua'
+client_scripts {
+    'client.lua',
+}
+
+server_scripts {
+    'server.lua',
+}
+
+dependencies {
+    'ox_lib',
+    'ox_target',
+    'ox_inventory',
+}
