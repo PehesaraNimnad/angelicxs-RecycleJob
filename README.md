@@ -1,4 +1,4 @@
-# angelicxs-RecycleJob
+# angelicxs-RecycleJob v2 (Rework by Project07)
 
 A simple and optimized recycling job script for FiveM servers. This resource allows players to collect recyclable materials, process them, and earn rewards through an immersive recycling system.
 
