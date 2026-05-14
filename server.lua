@@ -1,157 +1,146 @@
-ESX = nil
-QBcore = nil
-local PlayersAvailable = {}
+-- ============================================================
+--  angelicxs-RecycleJob | server.lua  v2.0
+--  No duty/payment. Items only via ox_inventory.
+-- ============================================================
 
-local Trash = {
-    TrashModel = 1748268526, 
-    TrashSpot = Config.TrashBin,
-    TrashObj = false
-}
-local ConModels = {
-    -14708062,
-    -96647174,
-    811169045,
-}
-local ActiveColour = {
-    yellow = false,
-    blue = false,
-    green = false,
-}
-local Containers = Config.RecycleBins
+-- ── Data ─────────────────────────────────────────────────────
+local PlayersInZone = {}   -- [src] = true | nil
 
-if Config.UseESX then
-    ESX = exports["es_extended"]:getSharedObject()
-elseif Config.UseQBCore then
-    QBCore = exports['qb-core']:GetCoreObject()
+local Containers   = Config.RecycleBins
+local ConModels    = { -14708062, -96647174, 811169045 }
+local ActiveColour = { yellow = false, blue = false, green = false }
+local TrashObjs    = {}    -- [index] = entity  (one per Config.TrashBins entry)
+
+-- ── Helpers ──────────────────────────────────────────────────
+local function Randomizer(list)
+    return list[math.random(#list)]
 end
 
-RegisterNetEvent('angelicxs-RecylceJob:Server:ActivityUpdater', function(active)
-    if active then
-        PlayersAvailable[source] = true
-        for k, v in pairs (Containers) do
-            if not DoesEntityExist(v.entity) then
-                ContainerMaker(v)
-            end
-        end
-        if not DoesEntityExist(Trash.TrashObj) then
-            Trash.TrashObj = CreateObject(Trash.TrashModel, Trash.TrashSpot.x, Trash.TrashSpot.y, Trash.TrashSpot.z-1, true, true, true)
-            SetEntityHeading(Trash.TrashObj, Trash.TrashSpot.w)
-        end
-        TriggerClientEvent('angelicxs-RecylceJob:Client:ActivityUpdater', -1, ActiveColour, Containers)
-    else
-        PlayersAvailable[source] = false
-        local inzone = 0
-        for id, active in pairs(PlayersAvailable) do
-            if active then inzone = inzone + 1 end
-        end
-        if inzone == 0 then
-            for k, v in pairs (Containers) do
-                if DoesEntityExist(v.entity) then
-                    DeleteEntity(v.entity)
-                    v.entity = nil
-                    v.colour = nil
-                end
-            end
-            if DoesEntityExist(Trash.TrashObj) then
-                DeleteEntity(Trash.TrashObj)
-                Trash.TrashObj = false
-            end
-            ActiveColour.yellow = false
-            ActiveColour.blue = false
-            ActiveColour.green = false
-            TriggerClientEvent('angelicxs-RecylceJob:Client:ActivityUpdater', -1, ActiveColour, Containers)
+local function AnyoneActive()
+    for _, v in pairs(PlayersInZone) do
+        if v then return true end
+    end
+    return false
+end
+
+-- Returns true if loc is within Config.FurthestBin of ANY trash bin
+local function NearAnyBin(loc)
+    for _, pos in ipairs(Config.TrashBins) do
+        if #(loc - vector3(pos.x, pos.y, pos.z)) <= Config.FurthestBin then
+            return true
         end
     end
-end)
+    return false
+end
 
-RegisterNetEvent('angelicxs-RecylceJob:Payment', function(number, loc)
-    local src = source
-    local dist = #(loc-vector3(Trash.TrashSpot.x, Trash.TrashSpot.y, Trash.TrashSpot.z))
-    if dist > Config.FurtherstBin then print('RecylceJob payment') TriggerEvent('angelicxs-RecylceJob:ThatIsAThing', "triggering payment more than 50 units away") return end
-    local amount = Config.FlatAmount*number
-    if Config.RandomAmount then
-        amount = math.floor(math.random(Config.MinAmount, Config.MaxAmount)*number)
-    end
-    if Config.UseESX then
-        local xPlayer = ESX.GetPlayerFromId(src)
-        xPlayer.addAccountMoney(Config.AccountMoney,amount)
-    elseif Config.UseQBCore then
-        local Player = QBCore.Functions.GetPlayer(src)
-        Player.Functions.AddMoney(Config.AccountMoney, amount)
-    end
-    TriggerClientEvent('angelicxs-RecylceJob:Notify',src, Config.Lang['offduty']..amount, Config.LangType['success'])
-end)
+-- ── Give item via ox_inventory ────────────────────────────────
+local function GiveItem(src, item, qty)
+    exports.ox_inventory:AddItem(src, item, qty)
+end
 
-RegisterNetEvent('angelicxs-RecylceJob:RandomItem', function(colour, loc)
-    local src = source
-    local dist = #(loc-vector3(Trash.TrashSpot.x, Trash.TrashSpot.y, Trash.TrashSpot.z))
-    if dist > Config.FurtherstBin then print('RecylceJob item') TriggerEvent('angelicxs-RecylceJob:ThatIsAThing', "triggering random item selection more than 50 units away") return end
-    if math.random(0,100) <= Config.GetRandomItemChance then
-        local item = Randomizer(Config.RandomItemList[colour])
-        if Config.UseESX then
-            Player = ESX.GetPlayerFromId(src)
-            Player.addInventoryItem(item.item, math.random(item.min,item.max))
-        elseif Config.UseQBCore then
-            Player = QBCore.Functions.GetPlayer(src)
-            Player.Functions.AddItem(item.item, math.random(item.min,item.max))
-            TriggerClientEvent('inventory:client:ItemBox', src, QBCore.Shared.Items[item.item], 'add')
-        end
-        TriggerClientEvent('angelicxs-RecylceJob:Notify',src, Config.Lang['item_find_1']..item.item..Config.Lang['item_find_2'], Config.LangType['success'])
-    end 
-end)
-
-RegisterNetEvent('angelicxs-RecylceJob:ThatIsAThing', function(reason)
-    local src = source
-    DropPlayer(src, "Go hack somewhere else.")
-    print("\n\n\n\nWARNING WARNING WARNING\nPlayer ID "..tostring(src).." was kicked for attempting to exploit angelicxs-RecylceJob for "..reason..". It is recommended you ban them.\nnWARNING WARNING WARNING\n\n\n\n")
-end)
-
-function ContainerMaker(table)
-    local colour = 'unknown'
+-- ── Entity management ─────────────────────────────────────────
+local function SpawnContainer(v)
     local hash = Randomizer(ConModels)
-    if hash == -14708062 then
-        table.colour = "yellow"
-        ActiveColour.yellow = true
-    elseif hash == -96647174 then
-        table.colour = "blue"
-        ActiveColour.blue = true
-    elseif hash == 811169045 then
-        table.colour = "green"
-        ActiveColour.green = true
+    if     hash == -14708062 then v.colour = 'yellow' ; ActiveColour.yellow = true
+    elseif hash == -96647174 then v.colour = 'blue'   ; ActiveColour.blue   = true
+    elseif hash == 811169045 then v.colour = 'green'  ; ActiveColour.green  = true
     end
-    table.entity = CreateObject(hash, table.spot.x, table.spot.y, table.spot.z-1, true, true, true)
-    SetEntityHeading(table.entity, table.spot.w)
+    v.entity = CreateObject(hash, v.spot.x, v.spot.y, v.spot.z - 1, true, true, true)
+    SetEntityHeading(v.entity, v.spot.w)
 end
 
-function Randomizer(Options)
-    local List = Options
-    local Number = 0
-    math.random()
-    local Selection = math.random(1, #List)
-    for i = 1, #List do
-        Number = Number + 1
-        if Number == Selection then
-            return List[i]
+local function SpawnTrashBins()
+    for i, pos in ipairs(Config.TrashBins) do
+        if not (TrashObjs[i] and DoesEntityExist(TrashObjs[i])) then
+            TrashObjs[i] = CreateObject(
+                1748268526, pos.x, pos.y, pos.z - 1, true, true, true)
+            SetEntityHeading(TrashObjs[i], pos.w)
         end
     end
 end
 
-AddEventHandler('onResourceStop', function(resource)
-    if GetCurrentResourceName() == resource then
-        PlayersAvailable = {}
-        for k, v in pairs (Containers) do
-            if DoesEntityExist(v.entity) then
-                DeleteEntity(v.entity)
-                v.entity = nil
-                v.colour = nil
+local function DeleteTrashBins()
+    for i, ent in pairs(TrashObjs) do
+        if DoesEntityExist(ent) then DeleteEntity(ent) end
+        TrashObjs[i] = nil
+    end
+end
+
+local function DeleteContainers()
+    for _, v in ipairs(Containers) do
+        if v.entity and DoesEntityExist(v.entity) then DeleteEntity(v.entity) end
+        v.entity = nil
+        v.colour = nil
+    end
+    ActiveColour.yellow = false
+    ActiveColour.blue   = false
+    ActiveColour.green  = false
+end
+
+-- ── Activity updater (player enter / exit depot) ──────────────
+RegisterNetEvent('angelicxs-RecycleJob:Server:ActivityUpdater', function(active)
+    local src = source
+    PlayersInZone[src] = active or nil
+
+    if active then
+        for _, v in ipairs(Containers) do
+            if not (v.entity and DoesEntityExist(v.entity)) then
+                SpawnContainer(v)
             end
         end
-        if DoesEntityExist(Trash.TrashObj) then
-            DeleteEntity(Trash.TrashObj)
-            Trash.TrashObj = nil
+        SpawnTrashBins()
+    else
+        if not AnyoneActive() then
+            DeleteContainers()
+            DeleteTrashBins()
         end
-        ActiveColour.yellow = false
-        ActiveColour.blue = false
-        ActiveColour.green = false
     end
+
+    TriggerClientEvent('angelicxs-RecycleJob:Client:ActivityUpdater', -1, ActiveColour, Containers)
+end)
+
+-- ── Reward: give items on correct sort ───────────────────────
+RegisterNetEvent('angelicxs-RecycleJob:GiveReward', function(colour, loc)
+    local src = source
+
+    -- Anti-cheat: must be near a trash bin
+    if not NearAnyBin(loc) then
+        TriggerEvent('angelicxs-RecycleJob:Cheat', src,
+            'reward triggered too far from any trash bin')
+        return
+    end
+
+    -- Chance check
+    if math.random(100) > Config.ItemRewardChance then return end
+
+    local pool = Config.RandomItemList[colour]
+    if not pool or #pool == 0 then return end
+
+    local pick = Randomizer(pool)
+    local qty  = math.random(pick.min, pick.max)
+
+    GiveItem(src, pick.item, qty)
+
+    TriggerClientEvent('angelicxs-RecycleJob:Notify', src,
+        Config.Lang['item_find_1'] .. pick.item ..
+        ' x' .. qty .. ' — ' .. Config.Lang['item_find_2'],
+        'success')
+end)
+
+-- ── Anti-cheat ────────────────────────────────────────────────
+AddEventHandler('angelicxs-RecycleJob:Cheat', function(src, reason)
+    print(('[RecycleJob] EXPLOIT | Player %d | %s'):format(src, reason))
+    DropPlayer(src, 'Exploit detected.')
+end)
+
+RegisterNetEvent('angelicxs-RecycleJob:ThatIsAThing', function(reason)
+    TriggerEvent('angelicxs-RecycleJob:Cheat', source, reason)
+end)
+
+-- ── Resource stop cleanup ─────────────────────────────────────
+AddEventHandler('onResourceStop', function(resource)
+    if GetCurrentResourceName() ~= resource then return end
+    PlayersInZone = {}
+    DeleteContainers()
+    DeleteTrashBins()
 end)
